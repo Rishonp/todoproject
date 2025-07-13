@@ -25,7 +25,8 @@ class Users(SQLModel, table=True):
             "username": self.username,
             "useremail": self.useremail,
             "userpass_hashed": self.userpass_hashed,
-            "user_createDatetime": self.user_createDatetime.format() if self.user_createDatetime else None,
+            #"user_createDatetime": self.user_createDatetime.format() if self.user_createDatetime else None,
+            "user_createDatetime": self.user_createDatetime.strftime("%Y-%m-%d %H:%M:%S") if self.user_createDatetime else None,
             "user_isActive": self.user_isActive,
         }
 
@@ -35,6 +36,18 @@ class Userrelation(SQLModel, table=True):
     userrelationtype: int | None = Field(default=-1)
     isactive: int | None = Field(default=-1)
     uniqueidentifyer: str | None = Field(primary_key=True, index=True, unique=True)
+    relationuserid_ack: int | None = Field(default=-1)
+
+
+
+class UserrelationParamsWrapper(BaseModel):
+    Userrelation: Userrelation
+    name: str| None
+
+class UserrelationWrapperOuter(BaseModel):
+    key: str| None
+    value: UserrelationParamsWrapper
+
 
 class MainTasks(SQLModel, table = True):
     userid: str | None = Field(index=True)
@@ -247,6 +260,57 @@ async def logInUser(user: Users):
 def get_uuid4_as_string():
     return str(uuid.uuid4())
 
+
+@app.post("/SignUpUser/",response_model=dict)
+async def my_root(userNTokenDict : dict[str,Any]):
+    print("received")
+    print(userNTokenDict )
+    user_data = userNTokenDict['params']['user']
+    token_data = userNTokenDict['params']['token']
+    user1 = Users(**user_data)
+    token1 = Token(**token_data)
+    usrNtkn = UserNToken(user=user1, token=token1)
+    print("after conversion")
+    print(usrNtkn )
+    #Block 1
+    # check if user already exists stating with username
+    with Session(engine) as session:
+        statement = select(Users).where(Users.username == usrNtkn.user.username)
+        results = session.exec(statement).all()
+    if len(results) != 0:
+        print("user already exists")
+        raise HTTPException(401,'User already exists in database')
+    #Block 2
+    #  add the user to the database
+    usrNtkn.user.userid = get_uuid4_as_string()  # generate a new UUID for the user
+    with Session(engine) as session:
+        session.add(usrNtkn.user)
+        session.commit()
+        session.refresh(usrNtkn.user)
+    #Block 3
+    #  generate and store token
+    token_data = {"sub": usrNtkn.user.username }
+    createDateTime = datetime.now()
+    access_token1 = create_token(token_data)
+    print("GENERATED TOKEN IS....")
+    print(access_token1)
+    print("GENERATED TOKEN IS....ABOVE")
+    tknn =  Token(access_token=access_token1.access_token, token_type="bearer", tokenCreateDateTime=createDateTime, username=usrNtkn.user.username,username_loggedin=usrNtkn.user.username)       
+    usrTkn = UserNToken(user=usrNtkn.user,token=tknn)
+    print("all good ")
+    print("finally returning ........good")
+    print("this is dict ")    
+    print("Just beforfe to Dict........................")
+    print ( "user is ")
+    print(usrNtkn.user)
+    print ( "and token is ")
+    print(tknn)
+    print(usrTkn.to_dict())    
+    return usrTkn.to_dict()
+   
+
+
+
 @app.post("/LogInUserNew1/",response_model=dict)
 async def my_root(userNTokenDict : dict[str,Any]):
     print("received")
@@ -296,6 +360,124 @@ async def my_root(userNTokenDict : dict[str,Any]):
 
 
 ##### Rishon code start here #####
+@app.post("/UpdateUserRelations/",response_model=dict)
+async def my_root(listToUpdate : list[dict[str, Any]]):
+    #print("received")
+    for item in listToUpdate:
+        print(item)
+        #print("item is ", item)
+        #print("item['uniqueidentifyer'] is ", item['uniqueidentifyer'])
+        #print("item['relationuserid_ack'] is ", item['relationuserid_ack'])
+        with Session(engine) as session:
+            statement = select(Userrelation).where(Userrelation.uniqueidentifyer == item['uniqueidentifyer'])
+            results = session.exec(statement).all()
+            if results is None or len(results) == 0:
+                print("No record found for unique identifyer", item['uniqueidentifyer'])
+                #raise HTTPException(status_code=404, detail="Record not found")
+            else:
+                toUpdateUserRelation = results[0]
+                toUpdateUserRelation.relationuserid_ack = item['relationuserid_ack']
+                session.add(toUpdateUserRelation)
+                session.commit()
+                session.refresh(toUpdateUserRelation)
+
+
+    #print(listToUpdate[0]['uniqueidentifyer'] )
+    #print(listToUpdate[0]['relationuserid_ack'] )
+    return {"status": "success", "message": "User relations updated successfully"}
+
+
+
+
+@app.get("/GetRelationsofUserWhoAcnowleged/", response_model=list[UserrelationParamsWrapper])
+async def my_root(inputData: str = None):
+    print("First line of GetRelationsofUser.................... ")
+    print("inputData is ......", inputData)
+    receivedDict = json.loads(inputData)
+    #print("receivedUserName is ", receivedDict['loggedInUserID'])
+    # tempUserRelation  =Userrelation(primaryuserid="rishonqqqqq", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty")
+    # arrayOfUserRelations = []
+    # arrayOfUserRelations.append(tempUserRelation)
+    # return arrayOfUserRelations
+    with Session(engine) as session:
+        statement = select(Userrelation).where(Userrelation.primaryuserid == receivedDict["loggedInUserID"] and Userrelation.relationuserid_ack == 1)
+        results = session.exec(statement).all()
+        if results is None or len(results) == 0:
+            print("GetRelationsofUser returned no records")
+            #raise HTTPException(status_code=404, detail="no relations found")
+            return []
+        else:
+            print("Hurray !!!!")
+            print("GetRelationsofUser returned records")
+            arrayOfUserRelations = []
+            for relation in results:
+                #print(relation)
+                tempUserRelation  =Userrelation(primaryuserid=relation.primaryuserid, relationuserid=relation.relationuserid, userrelationtype=relation.userrelationtype, isactive=relation.isactive, uniqueidentifyer=relation.uniqueidentifyer, relationuserid_ack=relation.relationuserid_ack)
+                arrayOfUserRelations.append(tempUserRelation)
+            # code to fill name starts here
+            arrURWrapper = []
+            for relation in arrayOfUserRelations:
+                tempUserRelation  =Userrelation(primaryuserid=relation.primaryuserid, relationuserid=relation.relationuserid, userrelationtype=relation.userrelationtype, isactive=relation.isactive, uniqueidentifyer=relation.uniqueidentifyer, relationuserid_ack=relation.relationuserid_ack)
+                tempWrapper = UserrelationParamsWrapper(Userrelation=tempUserRelation, name="")
+                usr = await getusergivenID(relation.relationuserid)
+                tempWrapper.name = usr.username
+                arrURWrapper.append(tempWrapper)
+            # code to fill name starts ends here
+            # final wrapper
+            # arrURWrapper = UserrelationWrapperOuter(key="UserRelations", value=Userrelation
+            # outerWrapperArray = []
+            # for outerWrapper in arrURWrapper:
+            #     outerWrapperObj = UserrelationWrapperOuter(key=get_uuid4_as_string(), value=outerWrapper)
+            #     outerWrapperArray.append(outerWrapperObj)
+            return arrURWrapper
+            
+
+
+
+@app.get("/GetRelationsofUser/", response_model=list[UserrelationParamsWrapper])
+async def my_root(inputData: str = None):
+    print("First line of GetRelationsofUser.................... ")
+    print("inputData is ......", inputData)
+    receivedDict = json.loads(inputData)
+    #print("receivedUserName is ", receivedDict['loggedInUserID'])
+    # tempUserRelation  =Userrelation(primaryuserid="rishonqqqqq", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty")
+    # arrayOfUserRelations = []
+    # arrayOfUserRelations.append(tempUserRelation)
+    # return arrayOfUserRelations
+    with Session(engine) as session:
+        statement = select(Userrelation).where(Userrelation.primaryuserid == receivedDict["loggedInUserID"])
+        results = session.exec(statement).all()
+        if results is None or len(results) == 0:
+            print("GetRelationsofUser returned no records")
+            raise HTTPException(status_code=404, detail="no relations found")
+        else:
+            print("Hurray !!!!")
+            print("GetRelationsofUser returned records")
+            arrayOfUserRelations = []
+            for relation in results:
+                #print(relation)
+                tempUserRelation  =Userrelation(primaryuserid=relation.primaryuserid, relationuserid=relation.relationuserid, userrelationtype=relation.userrelationtype, isactive=relation.isactive, uniqueidentifyer=relation.uniqueidentifyer, relationuserid_ack=relation.relationuserid_ack)
+                arrayOfUserRelations.append(tempUserRelation)
+            # code to fill name starts here
+            arrURWrapper = []
+            for relation in arrayOfUserRelations:
+                tempUserRelation  =Userrelation(primaryuserid=relation.primaryuserid, relationuserid=relation.relationuserid, userrelationtype=relation.userrelationtype, isactive=relation.isactive, uniqueidentifyer=relation.uniqueidentifyer, relationuserid_ack=relation.relationuserid_ack)
+                tempWrapper = UserrelationParamsWrapper(Userrelation=tempUserRelation, name="")
+                usr = await getusergivenID(relation.relationuserid)
+                tempWrapper.name = usr.username
+                arrURWrapper.append(tempWrapper)
+            # code to fill name starts ends here
+            # final wrapper
+            # arrURWrapper = UserrelationWrapperOuter(key="UserRelations", value=Userrelation
+            # outerWrapperArray = []
+            # for outerWrapper in arrURWrapper:
+            #     outerWrapperObj = UserrelationWrapperOuter(key=get_uuid4_as_string(), value=outerWrapper)
+            #     outerWrapperArray.append(outerWrapperObj)
+            return arrURWrapper
+            
+            
+            
+        
 
 @app.get("/GetUserIDgivenUserName/",response_model= dict[str, Any])
 async def my_root( inputData : str = None ):
@@ -324,7 +506,7 @@ async def my_root( inputData : str = None ):
                 if existing_relations is None or len(existing_relations) == 0:
                     userRel = Userrelation(
                         primaryuserid=receivedDict["loggedInUserID"], relationuserid=results[0].userid,
-                        userrelationtype=3, isactive=1, uniqueidentifyer=get_uuid4_as_string()
+                        userrelationtype=3, isactive=1, uniqueidentifyer=get_uuid4_as_string(), relationuserid_ack=-1
                     )
                     with Session(engine) as session:
                         session.add(userRel)
@@ -338,9 +520,55 @@ async def my_root( inputData : str = None ):
 
 
 
+@app.post("/AddTask/", response_model=None)
+async def my_root(taskIn: MainTaskParamsWrapper):
+    task = taskIn.params
+    #print("received task is AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", task)
+    newRecord =  MainTasks(
+        userid=task.userid,
+        tasktext=task.tasktext,
+        addtocal=task.addtocal,
+        priority=task.priority,
+        startdatetime=task.startdatetime,
+        enddatetime=task.enddatetime,
+        donestatus=task.donestatus,
+        donestatus_datetime= task.donestatus_datetime,
+        remarks=task.remarks,
+        addedby_userid=task.addedby_userid,
+        addedby_datetime= task.addedby_datetime,
+        uniqueidentifyer=get_uuid4_as_string(),
+        taskack=task.taskack,
+        taskack_datetime= task.taskack_datetime,
+    )
+    with Session(engine) as session:
+        session.add(newRecord)
+        session.commit()
+        session.refresh(newRecord)
+    return None
+    # with Session(engine) as session:
+    #     findTheRowOfTask = session.exec(select(MainTasks).where(MainTasks.uniqueidentifyer == task.uniqueidentifyer)).first()
+    #     if findTheRowOfTask:
+    #         findTheRowOfTask.taskack = task.taskack
+    #         if task.taskack == 1:   # if task is acknowledged, set the taskack_datetime to now
+    #             findTheRowOfTask.taskack_datetime = datetime.now()
+    #         else:  # if task is not acknowledged, set the taskack_datetime to None
+    #             findTheRowOfTask.taskack_datetime = None
+    #         findTheRowOfTask.priority = task.priority
+    #         findTheRowOfTask.donestatus = task.donestatus
+    #         findTheRowOfTask.startdatetime = task.startdatetime
+    #         findTheRowOfTask.enddatetime = task.enddatetime
+    #         findTheRowOfTask.remarks = task.remarks
+    #         findTheRowOfTask.tasktext = task.tasktext
+    #         session.add(findTheRowOfTask)
+    #         session.commit()
+    #         session.refresh(findTheRowOfTask)
+    #         return findTheRowOfTask
+    #     else:
+    #         raise HTTPException(status_code=404, detail="Task not found")
 
-#
-# RISHOn Method to get ALL TASK Start
+
+
+## RISHOn Method to get ALL TASK Start
 @app.post("/UpdateTask/", response_model=MainTasks)
 async def my_root(taskIn: MainTaskParamsWrapper):
     task = taskIn.params
@@ -595,7 +823,7 @@ async def my_root(listofUser:list[Users], relationType:int):
      isUser2Exists = await checkifuseridexists(listofUser[1].userid)
      if isUser1Exists is False or isUser2Exists is False:
         raise HTTPException(status_code=400, detail="One or both users do not exist")
-        emptyUserRelation = Userrelation(primaryuserid="empty", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty")
+        emptyUserRelation = Userrelation(primaryuserid="empty", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty", relationuserid_ack=-1)
         return emptyUserRelation
      else:
         tempUUID = get_uuid4_as_string()
@@ -604,7 +832,8 @@ async def my_root(listofUser:list[Users], relationType:int):
             relationuserid=listofUser[1].userid, 
             userrelationtype=relationType, 
             isactive=1, 
-            uniqueidentifyer=tempUUID
+            uniqueidentifyer=tempUUID,
+            relationuserid_ack=-1
         )
         alreadyExist = await checkifuserrelationexists(toaddUserRelation)
         if alreadyExist is True:
