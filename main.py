@@ -104,6 +104,13 @@ class MainTasks(SQLModel, table = True):
 class MainTaskParamsWrapper(BaseModel):
     params :MainTasks
 
+
+class MainTaskWrapperWithAddedByName(BaseModel):
+    maintask :MainTasks
+    added_by_name: str | None
+    addedby_userid: str | None
+
+
 class Token(BaseModel): ## for JWT token
     access_token: str
     token_type: str
@@ -394,13 +401,17 @@ async def my_root(inputData: str = None):
     print("First line of GetRelationsofUser.................... ")
     print("inputData is ......", inputData)
     receivedDict = json.loads(inputData)
-    #print("receivedUserName is ", receivedDict['loggedInUserID'])
+    print("receivedDict is ", receivedDict)
+    print("receivedUserName is ", receivedDict['loggedInUserID'])
     # tempUserRelation  =Userrelation(primaryuserid="rishonqqqqq", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty")
     # arrayOfUserRelations = []
     # arrayOfUserRelations.append(tempUserRelation)
     # return arrayOfUserRelations
     with Session(engine) as session:
-        statement = select(Userrelation).where(Userrelation.primaryuserid == receivedDict["loggedInUserID"] and Userrelation.relationuserid_ack == 1)
+        statement = select(Userrelation).where(
+            (Userrelation.primaryuserid == receivedDict["loggedInUserID"]) & 
+            (Userrelation.relationuserid_ack == 1)
+            )
         results = session.exec(statement).all()
         if results is None or len(results) == 0:
             print("GetRelationsofUser returned no records")
@@ -445,11 +456,11 @@ async def my_root(inputData: str = None):
     # arrayOfUserRelations.append(tempUserRelation)
     # return arrayOfUserRelations
     with Session(engine) as session:
-        statement = select(Userrelation).where(Userrelation.primaryuserid == receivedDict["loggedInUserID"])
+        statement = select(Userrelation).where(Userrelation.relationuserid == receivedDict["loggedInUserID"])
         results = session.exec(statement).all()
         if results is None or len(results) == 0:
             print("GetRelationsofUser returned no records")
-            raise HTTPException(status_code=404, detail="no relations found")
+            raise HTTPException(status_code=405, detail="no relations found")
         else:
             print("Hurray !!!!")
             print("GetRelationsofUser returned records")
@@ -463,7 +474,7 @@ async def my_root(inputData: str = None):
             for relation in arrayOfUserRelations:
                 tempUserRelation  =Userrelation(primaryuserid=relation.primaryuserid, relationuserid=relation.relationuserid, userrelationtype=relation.userrelationtype, isactive=relation.isactive, uniqueidentifyer=relation.uniqueidentifyer, relationuserid_ack=relation.relationuserid_ack)
                 tempWrapper = UserrelationParamsWrapper(Userrelation=tempUserRelation, name="")
-                usr = await getusergivenID(relation.relationuserid)
+                usr = await getusergivenID(relation.primaryuserid)
                 tempWrapper.name = usr.username
                 arrURWrapper.append(tempWrapper)
             # code to fill name starts ends here
@@ -523,7 +534,7 @@ async def my_root( inputData : str = None ):
 @app.post("/AddTask/", response_model=None)
 async def my_root(taskIn: MainTaskParamsWrapper):
     task = taskIn.params
-    #print("received task is AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", task)
+    print("received task is AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", task)
     newRecord =  MainTasks(
         userid=task.userid,
         tasktext=task.tasktext,
@@ -569,6 +580,21 @@ async def my_root(taskIn: MainTaskParamsWrapper):
 
 
 ## RISHOn Method to get ALL TASK Start
+@app.post("/DeleteTask/", response_model=None)
+async def my_root(taskIn: MainTaskParamsWrapper):
+    task = taskIn.params
+    with Session(engine) as session:
+        findTheRowOfTask = session.exec(select(MainTasks).where(MainTasks.uniqueidentifyer == task.uniqueidentifyer)).first()
+        if findTheRowOfTask:
+            session.delete(findTheRowOfTask)
+            session.commit()
+            return None
+        else:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+
+
+
 @app.post("/UpdateTask/", response_model=MainTasks)
 async def my_root(taskIn: MainTaskParamsWrapper):
     task = taskIn.params
@@ -596,33 +622,92 @@ async def my_root(taskIn: MainTaskParamsWrapper):
 
 @app.post("/markATaskAsDone/",response_model= MainTasks)
 async def my_root(taskIn: MainTaskParamsWrapper):
-    #print("inside the function markATaskAsDone..........")
-    # print("Original inputData dict  ......", type(taskIn))
-    #print("Original inputData dict  ......", taskIn.params)
-    #print("Original inputData dict  ......", taskIn["params"])
     task = taskIn.params
-    #print("formatted task is ", task)
-    #print("task.uniqueidentifyer is ", task.uniqueidentifyer)
+    print("markATaskAsDone called")
+    print("received task is ", task)
+    print("received task is ", task.donestatus)    
+    print("received task is ", task.donestatus_datetime)        
     with Session(engine) as session:
         findTheRowOfTask = session.exec(select(MainTasks).where(MainTasks.uniqueidentifyer == task.uniqueidentifyer)).first()
         if findTheRowOfTask:
             print("found the task in DB", task.uniqueidentifyer)
-            findTheRowOfTask.donestatus = 1
-            findTheRowOfTask.donestatus_datetime = datetime.now()
+            findTheRowOfTask.donestatus = task.donestatus
+            findTheRowOfTask.donestatus_datetime = task.donestatus_datetime
             session.add(findTheRowOfTask)
             session.commit()
             session.refresh(findTheRowOfTask)
-            print(f"Task {task.uniqueidentifyer} marked as done.")
             return findTheRowOfTask
         else:
-            print(f"Task {task.uniqueidentifyer} not found.")
             raise HTTPException(status_code=404, detail="Task not found")
 
 
-@app.get("/getalltasksforuser/",response_model=list[MainTasks])
+@app.get("/getalltasksforuser/",response_model=list[MainTaskWrapperWithAddedByName])
 async def my_root( inputData : str = None ):
-    print("inside the function ..........")
-    print("inputData is ......", inputData)
+    #print("inside the function ..........")
+   # print("inputData is ......", inputData)
+    parts = inputData.split("||||")
+    whichUser = parts[0]
+    whichDate = parts[1]
+    #print("whichUser" , whichUser)
+    #print("whichDate" , whichDate)
+    with Session(engine) as session:
+        statement = select(MainTasks).where(
+            (MainTasks.userid  == whichUser) & 
+            (MainTasks.donestatus == 0) & 
+            (
+                (MainTasks.startdatetime < whichDate) |
+                (MainTasks.enddatetime < whichDate)
+            )
+        ).order_by(MainTasks.startdatetime, MainTasks.priority)
+        results = session.exec(statement).all()
+        if results is None or len(results) == 0:
+            print("getalltasksforuser returned no records")
+            return []
+        else:
+            #print("Hurray !!!!")
+            print("getalltasksforuser returned records")
+            #print(results)
+            # Step 1 Create array
+            response_array = []
+            for mainTask in results:
+                mt  = MainTasks(
+                    userid=mainTask.userid,
+                    tasktext=mainTask.tasktext,
+                    addtocal=mainTask.addtocal,
+                    priority=mainTask.priority,
+                    startdatetime=mainTask.startdatetime,
+                    enddatetime=mainTask.enddatetime,
+                    donestatus=mainTask.donestatus,
+                    donestatus_datetime=mainTask.donestatus_datetime,
+                    remarks=mainTask.remarks,
+                    addedby_userid=mainTask.addedby_userid,
+                    addedby_datetime=mainTask.addedby_datetime,
+                    uniqueidentifyer=mainTask.uniqueidentifyer,
+                    taskack=mainTask.taskack,
+                    taskack_datetime=mainTask.taskack_datetime
+                )
+                response_array.append({
+                    "maintask": mt,
+                    "added_by_name": "",
+                    "addedby_userid": ""
+                })
+            # Step 2 fill the array with username
+            for i in range(len(response_array)):
+                if (response_array[i]['maintask'].addedby_userid != ""):
+                    addbyobj = await getusergivenID(response_array[i]['maintask'].addedby_userid)
+                    response_array[i]['added_by_name'] = addbyobj.username if addbyobj else ""
+                    response_array[i]['addedby_userid'] = addbyobj.userid if addbyobj else ""
+            # step 3 return the array
+            return response_array
+
+
+# RISHOn Method to get ALL TASK ends
+
+
+@app.get("/getalltasksloggedinuserhasaddedtoothers/",response_model=list[MainTasks])
+async def my_root( inputData : str = None ):
+    #print("inside the function ..........")
+   # print("inputData is ......", inputData)
     parts = inputData.split("||||")
     whichUser = parts[0]
     whichDate = parts[1]
@@ -630,24 +715,26 @@ async def my_root( inputData : str = None ):
     print("whichDate" , whichDate)
     with Session(engine) as session:
         statement = select(MainTasks).where(
-            (MainTasks.userid == whichUser) & 
-            (MainTasks.donestatus == 0) & 
+            (MainTasks.addedby_userid  == whichUser) & 
+            (MainTasks.donestatus != 1) & 
             (
                 (MainTasks.startdatetime < whichDate) |
                 (MainTasks.enddatetime < whichDate)
             )
-        ).order_by(MainTasks.priority)
+        ).order_by(MainTasks.startdatetime, MainTasks.priority)
         results = session.exec(statement).all()
+        print("results are ", results)
+        print("results length is ", len(results))
         if results is None or len(results) == 0:
-            print("getalltasksforuser returned no records")
+            print("getalltasksloggedinuserhasaddedtoothers returned no records")
             return []
         else:
             print("Hurray !!!!")
             return results
+    
+           
 
 
-# RISHOn Method to get ALL TASK ends
-#
 
 
 @app.get("/getuserdemo/", response_model=Users)
