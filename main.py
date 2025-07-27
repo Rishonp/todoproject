@@ -2,15 +2,44 @@ import uuid
 from fastapi import Depends,FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
-from typing import Any, Optional
+from typing import Any, Optional ,Literal , Dict
 from datetime import datetime, timedelta, timezone
 from fastapi.middleware.cors import CORSMiddleware
 from jose import ExpiredSignatureError, JWTError, jwt ## for JWT
 import json
+import requests  # this is used to send push notification to expo server
+
+
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
 #from typing import Union    
 ####from uuid import uuid4
 
+class usernotitoken (SQLModel, table=True):
+    userid: str | None = Field(primary_key=True, index=True, unique=True)
+    notitoken: str | None = Field(default=None)
+    username: str = Field(max_length=50, index=True)
 
+class TaskReminderData(BaseModel):
+    taskId: str = Field(..., alias="taskId")
+    taskText: str
+    fromUserId: int | str
+    fromUserName: str
+    type: str = "task_reminder"
+
+class NotificationPayload(BaseModel):
+    to: str
+    sound: str = "default"
+    title: str
+    body: str
+    data: TaskReminderData
+
+class ExpoPushError(Exception):
+    pass    
+
+
+class usernotitokenParamsWrapper(BaseModel):
+    params :usernotitoken
 
 class Users(SQLModel, table=True):
     userid: str | None = Field(primary_key=True, index=True, unique=True)
@@ -619,6 +648,68 @@ async def my_root(taskIn: MainTaskParamsWrapper):
         else:
             raise HTTPException(status_code=404, detail="Task not found")
 
+@app.post("/createUserNotificationToken/", response_model=usernotitoken)
+async def my_root(user_token_in: usernotitokenParamsWrapper):
+      #first find
+    #if exist then update
+    #if not exist then create
+    user_noti_token = user_token_in.params
+  
+
+    print("recived userid is ", user_noti_token.userid      )
+    with Session(engine) as session:
+        existing_token = session.exec(select(usernotitoken).where(usernotitoken.userid == user_noti_token.userid)).first()
+        print("existing token is ", existing_token)
+        if existing_token:
+            # Update the existing token
+            print("existing token found for userid ", user_noti_token.userid)
+            print("existing token is ", existing_token)
+            existing_token.notitoken = user_noti_token.notitoken
+            existing_token.username = user_noti_token.username
+            session.add(existing_token)
+            session.commit()
+            session.refresh(existing_token)
+            return existing_token
+        else:
+            # Create a new token
+            print("no existing token found for userid ", user_noti_token.userid)
+            new_token = usernotitoken()
+            new_token.userid = user_noti_token.userid
+            new_token.notitoken = user_noti_token.notitoken
+            new_token.username = user_noti_token.username
+            session.add(new_token)
+            print("after sesion.add  ")
+            session.commit()
+            session.refresh(new_token)
+            return new_token
+    
+
+
+def send_expo_notification(payload: dict) -> dict:
+    headers = {
+        "Accept": "application/json",
+        "Accept-encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(EXPO_PUSH_URL, json=payload, headers=headers, timeout=10)
+    response.raise_for_status()  # raises HTTPError if 4xx/5xx
+    data = response.json()
+
+    if "data" in data and isinstance(data["data"], dict) and data["data"].get("status") == "error":
+        raise Exception(f"Expo push error: {data}")
+    return data
+
+
+@app.post("/notify/", response_model=dict)
+def notify_task_reminder(payload: NotificationPayload):
+    print("notify_task_reminder called with payload: ", payload)
+    try:
+        expo_response = send_expo_notification(payload.model_dump(by_alias=True))
+        return {"status": "sent", "expo": expo_response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.post("/markATaskAsDone/",response_model= MainTasks)
 async def my_root(taskIn: MainTaskParamsWrapper):
@@ -641,7 +732,25 @@ async def my_root(taskIn: MainTaskParamsWrapper):
             raise HTTPException(status_code=404, detail="Task not found")
 
 
-@app.get("/getalltasksforuser/",response_model=list[MainTaskWrapperWithAddedByName])
+
+
+
+
+@app.get("/getUserPushToken/", response_model=usernotitoken)
+async def my_root(userId: str = None):
+    print("getUserPushToken called with userid: ", userId)
+    with Session(engine) as session:
+        found_userNotiToken = session.exec(select(usernotitoken).where(usernotitoken.userid == userId)).first()
+        if found_userNotiToken:
+            print("User notification token is: ", found_userNotiToken)
+            return found_userNotiToken
+        else:
+            print("User notificationNOT Found : ")
+            raise HTTPException(status_code=407, detail="User not found")
+
+
+
+@app.get("/getalltasksforuserBackup/",response_model=list[MainTaskWrapperWithAddedByName])
 async def my_root( inputData : str = None ):
     #print("inside the function ..........")
    # print("inputData is ......", inputData)
@@ -699,6 +808,90 @@ async def my_root( inputData : str = None ):
                     response_array[i]['addedby_userid'] = addbyobj.userid if addbyobj else ""
             # step 3 return the array
             return response_array
+
+
+
+
+@app.get("/getalltasksforuser/",response_model=list[MainTaskWrapperWithAddedByName])
+async def my_root( inputData : str = None ):
+    #print("inside the function ..........")
+   # print("inputData is ......", inputData)
+    parts = inputData.split("||||")
+    whichUser = parts[0]
+    whichDate = parts[1]
+    mainORNot = parts[2] 
+    #print("whichUser" , whichUser)
+    #print("whichDate" , whichDate)
+    with Session(engine) as session:
+        statement = None
+        if mainORNot == "main":
+            statement = select(MainTasks).where(
+                (MainTasks.userid  == whichUser) & 
+                (MainTasks.donestatus == 0) & 
+                (
+                    (MainTasks.startdatetime < whichDate) |
+                    (MainTasks.enddatetime < whichDate)
+                )
+            ).order_by(MainTasks.startdatetime, MainTasks.priority)
+        else:
+            statement = select(MainTasks).where(
+                (MainTasks.addedby_userid == whichUser) & 
+                (MainTasks.donestatus == 0) & 
+                (
+                    (MainTasks.startdatetime < whichDate) |
+                    (MainTasks.enddatetime < whichDate)
+                )
+            ).order_by(MainTasks.startdatetime, MainTasks.priority)
+        results = session.exec(statement).all()
+        if results is None or len(results) == 0:
+            print("getalltasksforuser returned no records")
+            return []
+        else:
+            #print("Hurray !!!!")
+            print("getalltasksforuser returned records")
+            #print(results)
+            # Step 1 Create array
+            response_array = []
+            for mainTask in results:
+                mt  = MainTasks(
+                    userid=mainTask.userid,
+                    tasktext=mainTask.tasktext,
+                    addtocal=mainTask.addtocal,
+                    priority=mainTask.priority,
+                    startdatetime=mainTask.startdatetime,
+                    enddatetime=mainTask.enddatetime,
+                    donestatus=mainTask.donestatus,
+                    donestatus_datetime=mainTask.donestatus_datetime,
+                    remarks=mainTask.remarks,
+                    addedby_userid=mainTask.addedby_userid,
+                    addedby_datetime=mainTask.addedby_datetime,
+                    uniqueidentifyer=mainTask.uniqueidentifyer,
+                    taskack=mainTask.taskack,
+                    taskack_datetime=mainTask.taskack_datetime
+                )
+                response_array.append({
+                    "maintask": mt,
+                    "added_by_name": "",
+                    "addedby_userid": ""
+                })
+            # Step 2 fill the array with username
+            # if "main" then pick addedby_userid else pick userid
+            for i in range(len(response_array)):
+                if mainORNot == "main":
+                    if (response_array[i]['maintask'].addedby_userid != ""):
+                        addbyobj = await getusergivenID(response_array[i]['maintask'].addedby_userid)
+                        response_array[i]['added_by_name'] = addbyobj.username if addbyobj else ""
+                        response_array[i]['addedby_userid'] = addbyobj.userid if addbyobj else ""
+                else:
+                    if (response_array[i]['maintask'].userid != ""):
+                        addbyobj = await getusergivenID(response_array[i]['maintask'].userid)
+                        response_array[i]['added_by_name'] = addbyobj.username if addbyobj else ""
+                        response_array[i]['addedby_userid'] = addbyobj.userid if addbyobj else ""
+            # step 3 return the array
+            return response_array
+
+
+
 
 
 # RISHOn Method to get ALL TASK ends
