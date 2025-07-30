@@ -814,7 +814,7 @@ async def my_root( inputData : str = None ):
 
 @app.get("/getalltasksforuser/",response_model=list[MainTaskWrapperWithAddedByName])
 async def my_root( inputData : str = None ):
-    #print("inside the function ..........")
+    #print("inside the function ..........") 
    # print("inputData is ......", inputData)
     parts = inputData.split("||||")
     whichUser = parts[0]
@@ -832,7 +832,7 @@ async def my_root( inputData : str = None ):
                     (MainTasks.startdatetime < whichDate) |
                     (MainTasks.enddatetime < whichDate)
                 )
-            ).order_by(MainTasks.startdatetime, MainTasks.priority)
+            ).order_by(MainTasks.startdatetime, MainTasks.priority).limit(100)
         else:
             statement = select(MainTasks).where(
                 (MainTasks.addedby_userid == whichUser) & 
@@ -841,7 +841,7 @@ async def my_root( inputData : str = None ):
                     (MainTasks.startdatetime < whichDate) |
                     (MainTasks.enddatetime < whichDate)
                 )
-            ).order_by(MainTasks.startdatetime, MainTasks.priority)
+            ).order_by(MainTasks.startdatetime, MainTasks.priority).limit(100)
         results = session.exec(statement).all()
         if results is None or len(results) == 0:
             print("getalltasksforuser returned no records")
