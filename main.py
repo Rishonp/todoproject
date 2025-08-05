@@ -15,6 +15,16 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 #from typing import Union    
 ####from uuid import uuid4
 
+class taskcal (SQLModel, table=True):
+    uniqueidentifyer: str | None = Field(primary_key=True, index=True, unique=True)
+    eventid: str | None = Field(default=None)
+    maintask_uniqueidentifyer: str = Field(max_length=300, index=True)
+
+class taskcalParamsWrapper(BaseModel):
+    params :taskcal
+
+
+
 class usernotitoken (SQLModel, table=True):
     userid: str | None = Field(primary_key=True, index=True, unique=True)
     notitoken: str | None = Field(default=None)
@@ -427,11 +437,11 @@ async def my_root(listToUpdate : list[dict[str, Any]]):
 
 @app.get("/GetRelationsofUserWhoAcnowleged/", response_model=list[UserrelationParamsWrapper])
 async def my_root(inputData: str = None):
-    print("First line of GetRelationsofUser.................... ")
-    print("inputData is ......", inputData)
+    #print("First line of GetRelationsofUser.................... ")
+    #print("inputData is ......", inputData)
     receivedDict = json.loads(inputData)
-    print("receivedDict is ", receivedDict)
-    print("receivedUserName is ", receivedDict['loggedInUserID'])
+    #print("receivedDict is ", receivedDict)
+    #print("receivedUserName is ", receivedDict['loggedInUserID'])
     # tempUserRelation  =Userrelation(primaryuserid="rishonqqqqq", relationuserid="empty", userrelationtype=-1, isactive=-1, uniqueidentifyer="empty")
     # arrayOfUserRelations = []
     # arrayOfUserRelations.append(tempUserRelation)
@@ -560,7 +570,69 @@ async def my_root( inputData : str = None ):
 
 
 
-@app.post("/AddTask/", response_model=None)
+
+
+@app.get("/CalanderEventIDExistsORNot/", response_model=taskcal)
+async def my_root(inputData: str = None):
+    print("CalanderEventIDExistsORNot called with inputData: ", inputData)
+    if not inputData or inputData.strip() == "":
+        raise HTTPException(status_code=409, detail="inputData cannot be empty")
+    with Session(engine) as session:
+        found_uidRecord = session.exec(select(taskcal).where(taskcal.maintask_uniqueidentifyer == inputData)).first()
+        if found_uidRecord:
+            print("Record found ", found_uidRecord)
+            return found_uidRecord
+        else:
+            print("Record Not found for task_uid: ", inputData)
+            raise HTTPException(status_code=408, detail="Task not found")
+            return None
+
+
+
+
+@app.post("/DeleteFromCalendar/", response_model=None)
+async def my_root(calIn: taskcalParamsWrapper):
+    calData = calIn.params
+    print("DeleteFromCalendar called")
+    print("received task is taskcalParamsWrapper", calData)
+    with Session(engine) as session:
+        statement = select(taskcal).where(
+            (taskcal.maintask_uniqueidentifyer == calData.maintask_uniqueidentifyer) & 
+            (taskcal.eventid == calData.eventid)  
+        )
+        foundRecord = session.exec(statement).first()
+        if foundRecord:
+            session.delete(foundRecord)
+            session.commit()
+            print("Record deleted successfully", foundRecord)
+            return None
+        else:
+            print("Record not found")
+            #raise HTTPException(status_code=409, detail="Record not found")
+            return None
+
+
+
+@app.post("/AddToCalendar/", response_model=None)
+async def my_root(calIn: taskcalParamsWrapper):
+    calData = calIn.params
+    print("AddToCalendar called")
+    print("received task is taskcalParamsWrapper", calData)
+    newRecord =  taskcal(
+        uniqueidentifyer=get_uuid4_as_string(),
+        eventid=calData.eventid,
+        maintask_uniqueidentifyer=calData.maintask_uniqueidentifyer
+    )
+    with Session(engine) as session:
+        session.add(newRecord)
+        session.commit()
+        session.refresh(newRecord)
+    return None
+
+
+
+
+@app.post("/AddTask/", response_model=MainTasks)
 async def my_root(taskIn: MainTaskParamsWrapper):
     task = taskIn.params
     print("received task is AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", task)
@@ -584,27 +656,7 @@ async def my_root(taskIn: MainTaskParamsWrapper):
         session.add(newRecord)
         session.commit()
         session.refresh(newRecord)
-    return None
-    # with Session(engine) as session:
-    #     findTheRowOfTask = session.exec(select(MainTasks).where(MainTasks.uniqueidentifyer == task.uniqueidentifyer)).first()
-    #     if findTheRowOfTask:
-    #         findTheRowOfTask.taskack = task.taskack
-    #         if task.taskack == 1:   # if task is acknowledged, set the taskack_datetime to now
-    #             findTheRowOfTask.taskack_datetime = datetime.now()
-    #         else:  # if task is not acknowledged, set the taskack_datetime to None
-    #             findTheRowOfTask.taskack_datetime = None
-    #         findTheRowOfTask.priority = task.priority
-    #         findTheRowOfTask.donestatus = task.donestatus
-    #         findTheRowOfTask.startdatetime = task.startdatetime
-    #         findTheRowOfTask.enddatetime = task.enddatetime
-    #         findTheRowOfTask.remarks = task.remarks
-    #         findTheRowOfTask.tasktext = task.tasktext
-    #         session.add(findTheRowOfTask)
-    #         session.commit()
-    #         session.refresh(findTheRowOfTask)
-    #         return findTheRowOfTask
-    #     else:
-    #         raise HTTPException(status_code=404, detail="Task not found")
+    return newRecord
 
 
 
