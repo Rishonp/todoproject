@@ -683,16 +683,24 @@ async def my_root(taskIn: MainTaskParamsWrapper):
         findTheRowOfTask = session.exec(select(MainTasks).where(MainTasks.uniqueidentifyer == task.uniqueidentifyer)).first()
         if findTheRowOfTask:
             findTheRowOfTask.taskack = task.taskack
-            if task.taskack == 1:   # if task is acknowledged, set the taskack_datetime to now
-                findTheRowOfTask.taskack_datetime = datetime.now()
-            else:  # if task is not acknowledged, set the taskack_datetime to None
-                findTheRowOfTask.taskack_datetime = None
+            # if task.taskack == 1:   # if task is acknowledged, set the taskack_datetime to now
+            #     findTheRowOfTask.taskack_datetime = datetime.now()
+            # else:  # if task is not acknowledged, set the taskack_datetime to None
+            #     findTheRowOfTask.taskack_datetime = None
+            findTheRowOfTask.userid = task.userid
+            findTheRowOfTask.tasktext = task.tasktext
+            findTheRowOfTask.addtocal = task.addtocal
             findTheRowOfTask.priority = task.priority
-            findTheRowOfTask.donestatus = task.donestatus
             findTheRowOfTask.startdatetime = task.startdatetime
             findTheRowOfTask.enddatetime = task.enddatetime
+            findTheRowOfTask.donestatus = task.donestatus
+            findTheRowOfTask.donestatus_datetime = task.donestatus_datetime
             findTheRowOfTask.remarks = task.remarks
-            findTheRowOfTask.tasktext = task.tasktext
+            findTheRowOfTask.addedby_userid = task.addedby_userid
+            findTheRowOfTask.addedby_datetime = task.addedby_datetime
+            # findTheRowOfTask.uniqueidentifyer = task.uniqueidentifyer  # uniqueidentifyer should not be changed
+            findTheRowOfTask.taskack = task.taskack
+            findTheRowOfTask.taskack_datetime = task.taskack_datetime
             session.add(findTheRowOfTask)
             session.commit()
             session.refresh(findTheRowOfTask)
